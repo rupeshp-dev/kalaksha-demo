@@ -1,20 +1,23 @@
 /* Simulated Shiprocket integration for the Kalaksha demo.
-   Courier names are real Indian couriers available through Shiprocket; the rates, delivery days
-   and ratings below are SAMPLE figures for the demo, not Shiprocket's price list. */
+   Rates are from Shiprocket's public rate card (Lite plan, shiprocket.in/pricing/rate-card, checked 9 Nov 2026):
+   first 500 g and each extra 500 g, by zone A–E. 18% GST is added on top. Delivery days and ratings are samples. */
 (function () {
+  // first: rate for the first 500 g, extra: each additional 500 g. Zones: A same city, B same state, C metro to metro, D rest of India, E North-East / J&K.
   const COURIERS = [
-    { id: 'delhivery', name: 'Delhivery Surface', rate: { local: 32, state: 38, national: 55 }, days: { local: 2, state: 3, national: 5 }, rating: 4.3, prefix: '1490' },
-    { id: 'xpressbees', name: 'Xpressbees', rate: { local: 30, state: 36, national: 52 }, days: { local: 2, state: 3, national: 5 }, rating: 4.1, prefix: '1418' },
-    { id: 'ekart', name: 'Ekart', rate: { local: 28, state: 34, national: 49 }, days: { local: 3, state: 4, national: 6 }, rating: 3.9, prefix: 'FMPC' },
-    { id: 'dtdc', name: 'DTDC', rate: { local: 34, state: 41, national: 58 }, days: { local: 2, state: 3, national: 5 }, rating: 4.0, prefix: 'D' },
-    { id: 'bluedart', name: 'Blue Dart', rate: { local: 55, state: 62, national: 86 }, days: { local: 1, state: 2, national: 3 }, rating: 4.6, prefix: '7766' },
+    { id: 'xpressbees', name: 'Xpressbees Surface', first: { A: 45, B: 53, C: 61, D: 65, E: 97 }, extra: { A: 42, B: 52, C: 55, D: 61, E: 91 }, days: { A: 2, B: 3, C: 4, D: 5, E: 7 }, rating: 4.1, prefix: '1418' },
+    { id: 'delhivery', name: 'Delhivery Surface', first: { A: 51, B: 57, C: 66, D: 71, E: 103 }, extra: { A: 48, B: 56, C: 63, D: 66, E: 97 }, days: { A: 2, B: 3, C: 4, D: 5, E: 7 }, rating: 4.3, prefix: '1490' },
+    { id: 'ekart', name: 'Ekart Surface', first: { A: 51, B: 57, C: 65, D: 70, E: 102 }, extra: { A: 48, B: 54, C: 62, D: 66, E: 97 }, days: { A: 3, B: 4, C: 5, D: 6, E: 8 }, rating: 3.9, prefix: 'FMPC' },
+    { id: 'dtdc', name: 'DTDC Surface', first: { A: 65.7, B: 72.6, C: 78.5, D: 83.5, E: 128.5 }, extra: { A: 64, B: 71, C: 76, D: 82, E: 127 }, days: { A: 2, B: 3, C: 4, D: 5, E: 7 }, rating: 4.0, prefix: 'D' },
+    { id: 'bluedart', name: 'Blue Dart Air', first: { A: 77, B: 91, C: 105, D: 123, E: 167 }, extra: { A: 73, B: 83, C: 100, D: 110, E: 157 }, days: { A: 1, B: 2, C: 2, D: 3, E: 4 }, rating: 4.6, prefix: '7766' },
   ];
   const FLOW = ['Pickup scheduled', 'Picked up', 'In transit', 'Out for delivery', 'Delivered'];
-  const ZONE_LABEL = { local: 'Same city', state: 'Within Maharashtra', national: 'Rest of India' };
+  const ZONE_LABEL = { A: 'Zone A · same city', B: 'Zone B · within state', C: 'Zone C · metro to metro', D: 'Zone D · rest of India', E: 'Zone E · North-East / J&K', local: 'Same city', state: 'Within state', national: 'Rest of India' };
+  const METROS = ['mumbai', 'delhi', 'new delhi', 'kolkata', 'chennai', 'bengaluru', 'bangalore', 'hyderabad', 'ahmedabad', 'pune'];
+  const SPECIAL_STATES = ['Assam', 'Arunachal Pradesh', 'Manipur', 'Meghalaya', 'Mizoram', 'Nagaland', 'Sikkim', 'Tripura', 'Jammu and Kashmir', 'Ladakh'];
   const DEFAULTS = {
     connected: true,
     pickup: { name: 'Kalaksha', phone: '', address: '[Pickup address]', city: 'Pune', state: 'Maharashtra', pin: '411001' },
-    perToranG: 150, packG: 100, box: '30 × 25 × 5 cm', rule: 'recommended', autoShip: false, notify: true, slot: '11 am – 2 pm',
+    perToranG: 150, packG: 100, boxCm: [25, 20, 5], rule: 'recommended', autoShip: false, notify: true, slot: '11 am – 2 pm',
   };
   const NDR_REASONS = ['Customer not available', 'Address incomplete', 'Customer asked for delivery later', 'Phone not reachable'];
 
@@ -22,20 +25,25 @@
   const fmtDay = (d) => new Date(d).toLocaleDateString('en-IN', { weekday: 'short', day: 'numeric', month: 'short' });
 
   function zoneOf(c, p) {
-    if (c.city && p.city && c.city.trim().toLowerCase() === p.city.trim().toLowerCase()) return 'local';
-    if (c.state === p.state) return 'state';
-    return 'national';
+    const cc = (c.city || '').trim().toLowerCase(), pc = (p.city || '').trim().toLowerCase();
+    if (cc && cc === pc) return 'A';
+    if (SPECIAL_STATES.includes(c.state)) return 'E';
+    if (c.state === p.state) return 'B';
+    if (METROS.includes(cc) && METROS.includes(pc)) return 'C';
+    return 'D';
   }
+  // Couriers charge the higher of actual weight and volumetric weight (L × W × H in cm ÷ 5000 kg).
+  function volumetricG(ship) { const [l, w, h] = ship.boxCm || [25, 20, 5]; return Math.round((l * w * h) / 5); }
   function quotes(o, ship, perParcel) {
     const per = perParcel || 4;
     const zone = zoneOf(o.customer, ship.pickup);
     const parcels = Math.max(1, Math.ceil(o.qty / per));
-    const weight = Math.min(o.qty, per) * ship.perToranG + ship.packG; // grams per parcel
-    const slabs = Math.max(1, Math.ceil(weight / 500));
+    const weight = Math.min(o.qty, per) * ship.perToranG + ship.packG; // actual grams per parcel
+    const charged = Math.max(weight, volumetricG(ship));
+    const slabs = Math.max(1, Math.ceil(charged / 500));
     return COURIERS.map((c) => {
-      const base = c.rate[zone];
-      const one = Math.round((base + (slabs - 1) * Math.round(base * 0.8)) * 1.18); // incl. 18% GST
-      return { id: c.id, name: c.name, cost: one * parcels, days: c.days[zone], rating: c.rating, zone, weight, parcels };
+      const one = Math.round((c.first[zone] + (slabs - 1) * c.extra[zone]) * 1.18); // + 18% GST
+      return { id: c.id, name: c.name, cost: one * parcels, days: c.days[zone], rating: c.rating, zone, weight, charged, slabs, parcels };
     });
   }
   function pick(qs, rule) {
@@ -53,7 +61,7 @@
     const at = when ? new Date(when) : new Date();
     const pickup = pickupDate ? new Date(pickupDate) : addDays(at, at.getHours() >= 14 ? 1 : 0);
     o.shipment = {
-      courierId: q.id, courier: q.name, awb: awbFor(q.id, rnd), cost: q.cost, parcels: q.parcels, weight: q.weight, zone: q.zone,
+      courierId: q.id, courier: q.name, awb: awbFor(q.id, rnd), cost: q.cost, parcels: q.parcels, weight: q.weight, charged: q.charged, zone: q.zone,
       days: q.days, eta: addDays(pickup, q.days).toISOString(), pickupDate: pickup.toISOString(), status: 'Pickup scheduled', attempts: 0,
       events: [
         { at: at.toISOString(), status: 'Shipment created', loc: 'Shiprocket', note: `${q.name} · ${q.parcels} parcel${q.parcels > 1 ? 's' : ''} · ${q.weight} g` },
@@ -70,7 +78,7 @@
     if (sh.status === 'Delivery failed') next = 'Out for delivery';
     else if (sh.status === 'Returning') next = 'Returned';
     else next = FLOW[FLOW.indexOf(sh.status) + 1];
-    const hub = sh.zone === 'national' ? 'Bhiwandi hub, Maharashtra' : sh.zone === 'state' ? o.customer.city + ' hub' : ship.pickup.city + ' sort centre';
+    const hub = ['C', 'D', 'E', 'national'].includes(sh.zone) ? 'Bhiwandi hub, Maharashtra' : ['B', 'state'].includes(sh.zone) ? o.customer.city + ' hub' : ship.pickup.city + ' sort centre';
     const loc = next === 'Picked up' ? ship.pickup.city : next === 'In transit' ? hub : next === 'Returned' ? ship.pickup.city : o.customer.city;
     const note = { 'Picked up': 'Collected from Kalaksha', 'In transit': 'Moving to destination', 'Out for delivery': sh.status === 'Delivery failed' ? 'Second attempt today' : 'With the delivery agent', Delivered: 'Received by customer', Returned: 'Back at Kalaksha' }[next] || '';
     sh.status = next;
@@ -90,5 +98,5 @@
     sh.events.push({ at: (when ? new Date(when) : new Date()).toISOString(), status: 'Returning', loc: o.customer.city, note: 'Return to Kalaksha requested' });
   }
 
-  window.SHIP = { COURIERS, FLOW, ZONE_LABEL, DEFAULTS, NDR_REASONS, zoneOf, quotes, pick, create, advance, fail, rto, fmtDay };
+  window.SHIP = { COURIERS, FLOW, ZONE_LABEL, DEFAULTS, volumetricG, NDR_REASONS, zoneOf, quotes, pick, create, advance, fail, rto, fmtDay };
 })();

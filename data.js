@@ -109,7 +109,7 @@
     const hist = [];
     for (let i = 29; i >= 0; i--) {
       const d = new Date(now); d.setDate(d.getDate() - i);
-      let orders = Math.round(370 + (29 - i) * 3.2 + (r() - 0.5) * 70);
+      let orders = Math.max(4, Math.round(12 + (29 - i) * 0.12 + (r() - 0.5) * 8)); // about 400–500 orders a month
       if (i === 0) orders = Math.round(orders * 0.62); // today so far
       const revenue = Math.round(orders * (440 + r() * 50));
       hist.push({ date: dayKey(d), orders, revenue });
@@ -118,8 +118,8 @@
     // Recent detailed orders (sample)
     const orders = [];
     let no = 24518;
-    for (let i = 0; i < 90; i++) {
-      const ageH = i * 0.8 + r() * 0.5; // newest first
+    for (let i = 0; i < 60; i++) {
+      const ageH = i * 1.6 + r() * 1; // about 15 orders a day // newest first
       const d = new Date(now.getTime() - ageH * 3600e3);
       const [city, state, pin] = pick(CITIES);
       const nItems = r() < 0.72 ? 1 : 2;
@@ -204,7 +204,7 @@
     };
 
     return {
-      version: 4,
+      version: 5,
       products: JSON.parse(JSON.stringify(PRODUCTS)).map((p) => Object.assign(p, { category: p.type.toLowerCase() })),
       categories, home,
       reviews, orders, hist, coupons, settings,

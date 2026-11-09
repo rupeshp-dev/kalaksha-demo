@@ -6,7 +6,7 @@ const KEY = 'kalaksha-demo-v1';
 
 /* ---------- storage ---------- */
 function load() {
-  try { const s = JSON.parse(localStorage.getItem(KEY)); if (s && s.version === 4) return s; } catch (e) {}
+  try { const s = JSON.parse(localStorage.getItem(KEY)); if (s && s.version === 5) return s; } catch (e) {}
   return seed();
 }
 function save(s) {
@@ -116,6 +116,7 @@ const PATHS = {
   trash: 'M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13',
   edit: 'M4 20h4L19 9l-4-4L4 16v4z',
   upload: 'M12 16V4m0 0-4 4m4-4 4 4M4 16v4h16v-4',
+  download: 'M12 4v12m0 0-4-4m4 4 4-4M4 16v4h16v-4',
   alert: 'M12 3 2 20h20L12 3zm0 7v4m0 3h.01',
   home: 'M3 11l9-7 9 7M5 10v10h14V10',
 };
@@ -1415,6 +1416,7 @@ function Orders({ db, update, notify, openOrder }) {
       <select id="ord-ch" class="select" value=${ch} onChange=${(e) => { setCh(e.target.value); setSel([]); }}>
         <option value="All">All channels</option>${CHANNELS.map((c) => html`<option key=${c} value=${c}>${c} (${db.orders.filter((o) => chanOf(o) === c).length})</option>`)}</select>
       <span class="grow"></span>
+      <button class="btn" title="Download the orders shown (filters applied) as a CSV for Excel" onClick=${() => { exportOrders(list); notify(`Exported ${list.length} orders`); }}><${Icon} n="download" /> Export</button>
       <button class="btn" onClick=${() => setDrawer('import')}><${Icon} n="upload" /> Import orders</button>
       <button class="btn primary" onClick=${() => setDrawer('add')}><${Icon} n="plus" /> Add WhatsApp order</button>
     </div>
@@ -1725,14 +1727,31 @@ function printLabels(orders, ship) {
   w.document.close();
   return 'ok';
 }
+// Download rows as a CSV file. The BOM makes Excel read ₹ and Marathi text correctly.
+function downloadCsv(name, rows) {
+  const csv = '\uFEFF' + rows.map((r) => r.map((v) => `"${String(v ?? '').replace(/"/g, '""')}"`).join(',')).join('\r\n');
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8' }));
+  a.download = `kalaksha-${name}-${dayKey(new Date())}.csv`; a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+}
 function downloadManifest(orders, ship) {
   const rows = [['awb', 'courier', 'order', 'customer', 'phone', 'city', 'state', 'pin', 'parcels', 'weight_g', 'payment', 'value']];
   orders.filter((o) => o.shipment).forEach((o) => rows.push([o.shipment.awb, o.shipment.courier, o.id, o.customer.name, o.customer.phone, o.customer.city, o.customer.state, o.customer.pin, o.shipment.parcels, o.shipment.weight, 'Prepaid', o.total]));
-  const csv = rows.map((r) => r.map((v) => `"${String(v).replace(/"/g, '""')}"`).join(',')).join('\n');
-  const a = document.createElement('a');
-  a.href = URL.createObjectURL(new Blob([csv], { type: 'text/csv' }));
-  a.download = `kalaksha-manifest-${dayKey(new Date())}.csv`; a.click();
-  setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+  downloadCsv('manifest', rows);
+}
+const localDT = (iso) => new Date(iso).toLocaleString('en-IN', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false });
+function exportOrders(orders) {
+  const rows = [['order_id', 'date', 'channel', 'status', 'customer', 'phone', 'email', 'address', 'city', 'state', 'pin', 'items', 'qty', 'subtotal', 'delivery', 'discount', 'coupon', 'total', 'payment_method', 'payment_status', 'payment_ref', 'courier', 'awb', 'shipment_status']];
+  orders.forEach((o) => rows.push([o.id, localDT(o.date), chanOf(o), o.status, o.customer.name, o.customer.phone, o.customer.email, o.customer.address, o.customer.city, o.customer.state, o.customer.pin,
+    o.items.map((i) => `${i.name}${i.variant ? ' (' + i.variant + ')' : ''} x${i.qty}`).join('; '), o.qty, o.subtotal, o.shipping, o.discount, o.coupon, o.total,
+    o.payment.method, o.payment.status, o.payment.ref, o.shipment?.courier || '', o.shipment?.awb || o.awb || '', o.shipment?.status || '']));
+  downloadCsv('orders', rows);
+}
+function exportProducts(db, list) {
+  const rows = [['product_id', 'name', 'marathi_name', 'category', 'collection', 'size', 'variant', 'price', 'compare_at', 'stock', 'sold_total', 'visible', 'new', 'bestseller']];
+  list.forEach((p) => p.variants.forEach((v) => rows.push([p.id + '-' + v.id, p.name, p.mr, catName(db, p.category), p.collection, p.size, v.name, p.price, p.mrp || '', v.stock, p.sold, p.active ? 'Yes' : 'No', p.isNew ? 'Yes' : 'No', p.bestseller ? 'Yes' : 'No'])));
+  downloadCsv('products', rows);
 }
 const labelMsg = (r) => (r === 'blocked' ? 'Allow pop-ups for localhost to print labels' : r === 'none' ? 'No shipments to print' : 'Labels opened in a new tab');
 
@@ -1799,13 +1818,13 @@ function ShipDialog({ db, update, notify, ids, onClose }) {
           <tbody>${readyOrders.map((o) => { const qs = quotesOf(o); const q = qs.find((x) => x.id === choice[o.id]) || qs[0]; return html`<tr key=${o.id}>
             <td class="mono">${o.id}</td>
             <td style=${{ whiteSpace: 'nowrap' }}>${o.customer.city}, ${o.customer.pin}<div class="muted" style=${{ fontSize: '12px' }}>${SHIP.ZONE_LABEL[q.zone]}</div></td>
-            <td style=${{ whiteSpace: 'nowrap' }}>${q.parcels} × ${q.weight} g<div class="muted" style=${{ fontSize: '12px' }}>${o.qty} toran${o.qty === 1 ? '' : 's'}</div></td>
+            <td style=${{ whiteSpace: 'nowrap' }}>${q.parcels} × ${q.weight} g<div class="muted" style=${{ fontSize: '12px' }}>${o.qty} toran${o.qty === 1 ? '' : 's'} · charged as ${q.slabs * 500} g</div></td>
             <td><select class="select" aria-label=${'Courier for ' + o.id} style=${{ padding: '6px 8px', minWidth: '260px' }} value=${choice[o.id]} onChange=${(e) => setChoice({ ...choice, [o.id]: e.target.value })}>
               ${[...qs].sort((a, b) => a.cost - b.cost).map((x) => html`<option key=${x.id} value=${x.id}>${x.name} · ${inr(x.cost)} · ${x.days} day${x.days === 1 ? '' : 's'} · ★${x.rating}</option>`)}</select></td>
             <td class="r num">${inr(o.shipping)}</td></tr>`; })}</tbody></table></div>
         <div class="row between wrapflex" style=${{ fontSize: '14px' }}>
           <span>Shipping cost <b class="num">${inr(cost)}</b> · Delivery charged to customers <b class="num">${inr(charged)}</b> · <b style=${{ color: charged - cost >= 0 ? 'var(--ok)' : 'var(--bad)' }}>${charged - cost >= 0 ? 'Covered, ' + inr(charged - cost) + ' left over' : 'Short by ' + inr(cost - charged)}</b></span>
-          <span class="muted">Sample rates incl. GST</span>
+          <span class="muted">Shiprocket Lite rate card + 18% GST</span>
         </div>
         <div class="row"><span class="grow"></span><button class="btn" onClick=${onClose}>Cancel</button><button class="btn primary" onClick=${create}><${Icon} n="truck" /> Create shipments and book pickup</button></div>`}`}
     </div>
@@ -1824,7 +1843,7 @@ function ShipmentPanel({ o, db, update, notify, onCreate }) {
     <h3 style=${{ margin: 0 }}><span>Shipping · ${sh.courier}</span><span class=${'pill ' + SHIP_PILL[sh.status]}>${sh.status}</span></h3>
     <div class="sum">
       <div class="r"><span>AWB / tracking no.</span><b class="mono">${sh.awb}</b></div>
-      <div class="r"><span>Parcels</span><span>${sh.parcels} × ${sh.weight} g · ${SHIP.ZONE_LABEL[sh.zone]}</span></div>
+      <div class="r"><span>Parcels</span><span>${sh.parcels} × ${sh.weight} g${sh.charged > sh.weight ? ' (charged as ' + sh.charged + ' g)' : ''} · ${SHIP.ZONE_LABEL[sh.zone]}</span></div>
       <div class="r"><span>Pickup</span><span>${SHIP.fmtDay(sh.pickupDate)}, ${ship.slot}</span></div>
       <div class="r"><span>${sh.status === 'Delivered' ? 'Delivered' : 'Expected delivery'}</span><span>${SHIP.fmtDay(sh.deliveredAt || sh.eta)}</span></div>
       <div class="r"><span>Shipping cost / charged</span><span class="num">${inr(sh.cost)} / ${inr(o.shipping)}</span></div>
@@ -1865,7 +1884,7 @@ function Shipments({ db, update, notify, openOrder }) {
   };
   const toPrint = list.filter((o) => o.shipment.status === 'Pickup scheduled');
   return html`<div class="stack" style=${{ gap: '14px' }}>
-    <div class="callout" style=${{ background: 'var(--surface-2)' }}><${Icon} n="truck" /> Shiprocket picks a courier for each parcel, generates the AWB and label, books the pickup and sends tracking updates back here. This demo simulates it with sample rates.</div>
+    <div class="callout" style=${{ background: 'var(--surface-2)' }}><${Icon} n="truck" /> Shiprocket picks a courier for each parcel, generates the AWB and label, books the pickup and sends tracking updates back here. This demo simulates it using rates from Shiprocket’s public rate card (Lite plan) plus 18% GST.</div>
     <div class="kpis">
       <div class="kpi" style=${{ cursor: ready.length ? 'pointer' : 'default' }} onClick=${() => ready.length && setDlg(ready.map((o) => o.id))}><span class="l">Ready to ship</span><span class="v num">${ready.length}</span><span class="s">${ready.length ? 'Click to create shipments' : 'All paid orders shipped'}</span></div>
       <div class="kpi"><span class="l">Awaiting pickup</span><span class="v num">${count('Pickup scheduled')}</span><span class="s">Labels to print and stick</span></div>
@@ -1930,6 +1949,10 @@ function ShippingSettings({ db, update }) {
       <label class="f" htmlFor="sh-w">Weight per toran (g)<input id="sh-w" class="input" type="number" min="1" value=${sh.perToranG} onChange=${(e) => set('perToranG', Math.max(1, +e.target.value || 1))} /></label>
       <label class="f" htmlFor="sh-pk">Packaging weight (g)<input id="sh-pk" class="input" type="number" min="0" value=${sh.packG} onChange=${(e) => set('packG', Math.max(0, +e.target.value || 0))} /></label>
     </div>
+    <div class="stack" style=${{ gap: '6px' }}>
+      <div class="grid3">${['Length', 'Width', 'Height'].map((lab, i) => html`<label key=${lab} class="f" htmlFor=${'sh-box' + i}>Box ${lab.toLowerCase()} (cm)<input id=${'sh-box' + i} class="input" type="number" min="1" value=${(sh.boxCm || [25, 20, 5])[i]} onChange=${(e) => { const b = [...(sh.boxCm || [25, 20, 5])]; b[i] = Math.max(1, +e.target.value || 1); set('boxCm', b); }} /></label>`)}</div>
+      <span class="muted" style=${{ fontSize: '13px' }}>Volumetric weight ${SHIP.volumetricG(sh)} g (L × W × H ÷ 5000). Couriers charge the higher of this and the actual weight, in 500 g steps.${SHIP.volumetricG(sh) > 500 ? ' This box is charged as more than 500 g even for one toran.' : ''}</span>
+    </div>
     ${sw('autoShip', 'Create the shipment automatically when an order is marked Packed')}
     ${sw('notify', 'Send courier and tracking updates to customers on WhatsApp and email')}
   </div>`;
@@ -1943,7 +1966,8 @@ function Products({ db, update, notify, editProduct }) {
   const setField = (pid, k, v) => update((d) => { d.products.find((p) => p.id === pid)[k] = v; });
   return html`<div>
     <div class="toolbar"><input id="prod-search" class="input" placeholder="Search products" value=${q} onChange=${(e) => setQ(e.target.value)} />
-      <span class="grow"></span><button class="btn primary" onClick=${() => editProduct('new')}><${Icon} n="plus" /> Add product</button></div>
+      <span class="grow"></span><button class="btn" title="Download products and stock by colour as a CSV" onClick=${() => { exportProducts(db, list); notify(`Exported ${list.length} products`); }}><${Icon} n="download" /> Export</button>
+      <button class="btn primary" onClick=${() => editProduct('new')}><${Icon} n="plus" /> Add product</button></div>
     <div class="callout" style=${{ marginBottom: '12px' }}><${Icon} n="alert" /> Edit a price here and it updates in the store right away. Click a row to edit everything.</div>
     <div class="table-wrap"><table>
       <thead><tr><th></th><th>Product</th><th>Category</th><th class="r">Price (₹)</th><th class="r">Compare at (₹)</th><th class="r">Stock</th><th class="r">Sold</th><th>Rating</th><th>Visible</th><th></th></tr></thead>
@@ -2051,20 +2075,24 @@ function Inventory({ db, update, notify }) {
   </div>`;
 }
 
-function Customers({ db }) {
+function Customers({ db, notify }) {
   const [q, setQ] = useState('');
   const map = {};
   db.orders.forEach((o) => {
     const k = o.customer.phone;
-    const c = map[k] || (map[k] = { name: o.customer.name, phone: k, city: o.customer.city, state: o.customer.state, orders: 0, spent: 0, last: o.date, mine: false });
-    c.orders++; c.spent += o.total; if (o.date > c.last) c.last = o.date; if (o.mine) c.mine = true;
+    const c = map[k] || (map[k] = { name: o.customer.name, phone: k, email: o.customer.email || '', city: o.customer.city, state: o.customer.state, pin: o.customer.pin, orders: 0, spent: 0, first: o.date, last: o.date, channels: new Set(), mine: false });
+    c.orders++; c.spent += o.total; if (o.date > c.last) c.last = o.date; if (o.date < c.first) c.first = o.date; if (!c.email && o.customer.email) c.email = o.customer.email; c.channels.add(chanOf(o)); if (o.mine) c.mine = true;
   });
   const t = q.trim().toLowerCase();
   const list = Object.values(map).filter((c) => !t || (c.name + c.phone + c.city).toLowerCase().includes(t)).sort((a, b) => b.spent - a.spent);
   const mh = list.filter((c) => c.state === 'Maharashtra').length;
   return html`<div>
     <div class="toolbar"><input id="cust-search" class="input" placeholder="Search name, phone, city" value=${q} onChange=${(e) => setQ(e.target.value)} />
-      <span class="muted">${list.length} customers · ${Math.round((mh / Math.max(1, list.length)) * 100)}% in Maharashtra</span></div>
+      <span class="muted">${list.length} customers · ${Math.round((mh / Math.max(1, list.length)) * 100)}% in Maharashtra</span><span class="grow"></span>
+      <button class="btn" title="Download the customers shown as a CSV, for WhatsApp or email lists" onClick=${() => {
+        downloadCsv('customers', [['name', 'phone', 'email', 'city', 'state', 'pin', 'orders', 'total_spent', 'first_order', 'last_order', 'channels'],
+          ...list.map((c) => [c.name, c.phone, c.email, c.city, c.state, c.pin, c.orders, c.spent, localDT(c.first), localDT(c.last), [...c.channels].join('; ')])]);
+        notify && notify(`Exported ${list.length} customers`); }}><${Icon} n="download" /> Export</button></div>
     <div class="table-wrap"><table>
       <thead><tr><th>Customer</th><th>Phone</th><th>Location</th><th class="r">Orders</th><th class="r">Total spent</th><th>Last order</th></tr></thead>
       <tbody>${list.map((c) => html`<tr key=${c.phone}>
